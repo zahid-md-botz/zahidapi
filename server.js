@@ -4,40 +4,51 @@ const app = express();
 
 app.use(express.json({ limit: '10mb' }));
 
-// ۱۔ ہوم اور ہیلتھ چیک روٹ
+// ۱۔ ہوم اور ہیلتھ چیک روٹس (کوئی اینڈ پوائنٹ بلاک نہیں ہوگا)
 app.get('/', (req, res) => {
   res.json({
     ok: true,
     brand: 'Zaidi Tech API Hub',
     endpoints: {
       movies: '/movies/search یا /stream/:subjectId',
-      youtube: '/api/youtube/download?url=...',
       sports: '/sports/list'
     }
   });
 });
 
-// ۲. مووی باکس API کو یہاں ماؤنٹ کریں (जो آپ کے پاس پہلے سے ہے)
+app.get('/health', (req, res) => {
+  res.json({ ok: true, service: 'moviebox-single' });
+});
+
+// ۲. مووی باکس API اور باقی تمام روٹس کو یہاں ماؤنٹ کریں
 try {
   const movieboxModule = require('./moviebox-final');
-  // اگر moviebox-final خود express app ہے تو اسے ماؤنٹ کریں:
   app.use('/', movieboxModule.app || movieboxModule);
   console.log('✅ MovieBox API mounted successfully.');
 } catch (e) {
   console.error('❌ MovieBox mount failed:', e.message);
 }
 
-// ۳. اگر آپ کے پاس یوٹیوب ڈاؤنلوڈر یا دیگر اسکریپٹس ہیں، تو انہیں اس طرح جوڑیں:
-try {
-  const youtubeRouter = require('./routes/youtube');
-  app.use('/api/youtube', youtubeRouter);
-  console.log('✅ YouTube Downloader API mounted successfully.');
-} catch (e) {
-  console.log('ℹ️ YouTube router not found yet (add it in routes/youtube.js when ready).');
-}
-
-// سرور لسننگ
+// ۳. پورٹ اور اینٹی سلیپ (Anti-Sleep) سسٹم
 const PORT = process.env.PORT || 8787;
+// Render کا اپنا لائیو URL خود اٹھا لے گا، ورنہ لوکل ہوسٹ استعمال ہوگا
+const APP_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+
 app.listen(PORT, () => {
   console.log(`🚀 Zaidi API Hub is running live on port ${PORT}`);
+
+  // ---------------------------------------------------------
+  // اینٹی سلیپ (Anti-Sleep) کیپ-الائیو لوپ
+  // ہر 10 منٹ (600,000 ملی سیکنڈ) بعد خود کو پنگ کرے گا تاکہ سرور ایکٹیو رہے
+  // ---------------------------------------------------------
+  const PING_INTERVAL = 10 * 60 * 1000; 
+
+  setInterval(async () => {
+    try {
+      const response = await fetch(`${APP_URL}/health`);
+      console.log(`[Anti-Sleep] Self ping successful! Status: ${response.status}`);
+    } catch (error) {
+      console.error('[Anti-Sleep] Self ping failed:', error.message);
+    }
+  }, PING_INTERVAL);
 });
