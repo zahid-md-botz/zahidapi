@@ -119,7 +119,32 @@ class MovieBoxEngine {
   }
   async search(query, page=1, perPage=20){
     const data=(await this.apiRequest('POST','/wefeed-mobile-bff/subject-api/search',{keyword:query,page,perPage})).data||{};
-    return (data.items||data.list||[]).map(it=>{ const s=it.subject||it; return { subject_id:String(s.subjectId), title:s.title, type:s.subjectType===1?'Movie':'Series', subject_type:s.subjectType, release_date:s.releaseDate, imdb_rating:s.imdbRatingValue, genre:s.genre, cover:(s.cover&&s.cover.url)||null, detail_path:s.detailPath, language:s.language }; }).filter(x=>!isAdultGenre(x.genre));
+    let items = (data.items||data.list||[]).map(it=>{ 
+      const s=it.subject||it; 
+      return { 
+        subject_id:String(s.subjectId), 
+        title:s.title, 
+        type:s.subjectType===1?'Movie':'Series', 
+        subject_type:s.subjectType, 
+        release_date:s.releaseDate, 
+        imdb_rating:s.imdbRatingValue, 
+        genre:s.genre, 
+        cover:(s.cover&&s.cover.url)||null, 
+        detail_path:s.detailPath, 
+        language:s.language 
+      }; 
+    }).filter(x=>!isAdultGenre(x.genre));
+
+    // Strict filter to remove music tracks, mixes, and junk search results
+    items = items.filter(x => {
+      if (!x.title || !x.subject_id) return false;
+      if (x.subject_type === 6) return false;
+      const t = x.title.toLowerCase();
+      if (t.includes('mix') || t.includes('jukebox') || t.includes('dj ') || t.includes('playlist') || t.includes('remix') || t.includes('audio') || t.includes('mashup') || t.includes('covers')) return false;
+      return true;
+    });
+
+    return items;
   }
   async getDetails(subjectId){
     const data=(await this.apiRequest('GET','/wefeed-mobile-bff/subject-api/get?subjectId='+subjectId)).data||{};
@@ -289,26 +314,55 @@ app.post(['/internal/movie','/api-server/internal/movie'], async (req,res)=>{
 
 app.get('/health',(req,res)=>res.json({ok:true,service:'moviebox-single'}));
 app.get('/movies/trending',async(req,res)=>{ try{ const raw=await engine.apiRequest('POST','/wefeed-mobile-bff/subject-api/trending/v2',{page:+(req.query.page||1),pageSize:+(req.query.pageSize||20)}); res.json({ok:true,data:stripAdult(raw.data)}); }catch(e){ fail(res,e.message,503,e.message);} });
+
 app.get('/movies/search',async(req,res)=>{
   const q=String(req.query.q||''), page=+(req.query.page||1);
-  try{ res.json({ok:true,data:await engine.search(q,page)}); return; }catch(e){ /* native search is geo-gated from datacentre, fall back to web upstream */ }
+  try{ 
+    const resList = await engine.search(q,page);
+    if(resList && resList.length > 0) {
+      return res.json({ok:true, data: resList});
+    }
+  }catch(e){ /* native search failed, fall back to web upstream */ }
+  
   try{
     const sug=await webPost('/subject/search-suggest',{keyword:q,perPage:10});
-    const words=(sug.items||[]).map(x=>String(x.word||'').trim()).filter(Boolean);
+    const words=(sug.items||[]).map(x=>String(x.word||x.title||'').trim()).filter(Boolean);
+    const searchWords = [q, ...words].filter(Boolean);
     const seen=new Set(); const out=[];
-    for(const w of words.slice(0,3)){
+    for(const w of searchWords.slice(0,3)){
       try{
         const f=await webPost('/subject/filter',{subjectType:1,page,perPage:20,keyword:w,genre:'All',sort:'ForYou'});
-        for(const it of (f.items||[])){ const id=String(it.subjectId||''); if(!id||seen.has(id))continue; seen.add(id);
-          out.push({subject_id:id,title:it.title,type:it.subjectType===1?'Movie':'Series',subject_type:it.subjectType,release_date:it.releaseDate,imdb_rating:it.imdbRatingValue,genre:it.genre,cover:(it.cover&&it.cover.url)||null,detail_path:it.detailPath,language:it.language}); }
+        for(const it of (f.items||[])){ 
+          const id=String(it.subjectId||''); 
+          if(!id||seen.has(id))continue; 
+          const title = it.title || '';
+          const tLower = title.toLowerCase();
+          if(isAdultGenre(it.genre)) continue;
+          if(tLower.includes('mix') || tLower.includes('jukebox') || tLower.includes('dj') || tLower.includes('playlist') || tLower.includes('remix') || tLower.includes('audio')) continue;
+          seen.add(id);
+          out.push({
+            subject_id:id,
+            title:it.title,
+            type:it.subjectType===1?'Movie':'Series',
+            subject_type:it.subjectType,
+            release_date:it.releaseDate,
+            imdb_rating:it.imdbRatingValue,
+            genre:it.genre,
+            cover:(it.cover&&it.cover.url)||null,
+            detail_path:it.detailPath,
+            language:it.language
+          }); 
+        }
       }catch(_){}
     }
-    res.json({ok:true,data:out});
+    res.json({ok:true, data:out});
   }catch(e){ fail(res,e.message,503,e.message); }
 });
+
 app.get('/shorts/trending',async(req,res)=>{ try{ const raw=await engine.apiRequest('POST','/wefeed-mobile-bff/shorts/most-trending',{page:+(req.query.page||1),pageSize:+(req.query.pageSize||20)}); res.json({ok:true,data:stripAdult(raw.data)}); }catch(e){ fail(res,e.message,503,e.message);} });
 app.get('/sports/list',async(req,res)=>{ try{ res.json({ok:true,data:await sportsGet('/live/match-list-v5',{sportType:String(req.query.sportType||'football')})}); }catch(e){ fail(res,e.message,503,e.message);} });
 app.get('/stream/:subjectId',async(req,res)=>{ try{ res.json({ok:true,data:await streamsOp(req.params.subjectId,+(req.query.se||0),+(req.query.ep||0),req.query.detailPath)}); }catch(e){ const s=e.message==='NO_MEDIA'?404:503; fail(res,'unavailable',s,e.message);} });
+
 // live sport stream proxy: follows the m3u8 with the right referer and pipes it back.
 app.get('/live/sport', async (req,res)=>{
   try{
@@ -326,7 +380,6 @@ app.get('/live/sport', async (req,res)=>{
   }catch(e){ fail(res,e.message,503,e.message); }
 });
 
-
 try { require("./tg-storage").mount(app); } catch(e){ console.error("tg-storage mount failed:", e.message); }
 
 // stream proxy: player gets tokenized segment links, the relay replays CDN
@@ -338,5 +391,23 @@ try {
   app.head("/media/segment/:token", _proxy.segmentHandler);
 } catch (e) { console.error("stream-proxy mount failed:", e.message); }
 
-if (require.main === module) { const PORT=process.env.PORT||8787; app.listen(PORT,()=>console.log('moviebox-single listening on '+PORT)); }
+// Self-ping Anti-Sleep mechanism for Render Free Tier
+const PORT = process.env.PORT || 8787;
+const APP_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+
+app.listen(PORT, () => {
+  console.log(`moviebox-single listening on port ${PORT}`);
+
+  // Anti-Sleep loop: Ping every 10 minutes to prevent Render from idling
+  const PING_INTERVAL = 10 * 60 * 1000;
+  setInterval(async () => {
+    try {
+      const response = await fetch(`${APP_URL}/health`);
+      console.log(`[Anti-Sleep] Self ping successful! Status: ${response.status}`);
+    } catch (error) {
+      console.error('[Anti-Sleep] Self ping failed:', error.message);
+    }
+  }, PING_INTERVAL);
+});
+
 module.exports={app,engine,streamsOp};
