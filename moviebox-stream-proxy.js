@@ -7,14 +7,6 @@
  * the relay replays the real request with the right Referer/cookie/UA. That is
  * what stops the 429s, the CDN is hit once, with the headers it wants, under a
  * concurrency cap.
- *
- * Mount into moviebox-final.js:
- *   const proxy = require('./moviebox-stream-proxy');
- *   proxy.mount(app, streamsOp, null);   // streamsOp(subjectId, season, episode, detailPath)
- *
- * Env:
- *   MEDIA_BASE   public base for segment links (default http://localhost:8787/media/segment/)
- *   MAX_STREAMS  concurrent upstream media sockets (default 24)
  */
 
 const crypto = require('crypto');
@@ -115,14 +107,12 @@ function rewriteDash(xml, url, headers) {
       out = out.replace(re, (_, a, rel, b) => a + childUrl(resolveUrl(localBase, rel), headers) + b);
     }
     if (/<Location>[^<]+<\/Location>/.test(out)) {
-      out = out.replace(/<Location>([^<]+)<\/Location>/g,
+      out = out.replace(/<Location>([^<]+<\/Location>/g,
         (_, rel) => `<Location>${childUrl(resolveUrl(base, rel.trim()), headers)}</Location>`);
     }
     return out;
   };
 
-  // Split at the MPD root boundaries is overkill; the attribute rewrite covers
-  // SegmentTemplate/SegmentURL across the whole document with one base pass.
   return visit(xml, rootBase);
 }
 
@@ -329,7 +319,6 @@ function mount(app, resolveResources, resolveSports) {
     }
   };
 
-  // Segment handler: player hits this for every tokenized child URL.
   const segmentHandler = async (req, res) => {
     const subs = {};
     for (const [k, v] of Object.entries(req.query || {})) {
@@ -340,13 +329,6 @@ function mount(app, resolveResources, resolveSports) {
   };
 
   return { mediaHandler, segmentHandler };
-
-  // The caller (moviebox-final.js) registers the routes:
-  //   const proxy = require('./moviebox-stream-proxy');
-  //   const p = proxy.mount(app, streamsOp, null);
-  //   app.post(['/internal/media','/api-server/internal/media'], p.mediaHandler);
-  //   app.get('/media/segment/:token', p.segmentHandler);
-  //   app.head('/media/segment/:token', p.segmentHandler);
 }
 
 module.exports = { mount, remember, rewriteManifest, allowed, MEDIA_BASE, MAX_STREAMS };
