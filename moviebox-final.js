@@ -7,6 +7,7 @@
  */
 const crypto = require('crypto');
 const express = require('express');
+const streamProxy = require('./moviebox-stream-proxy');
 
 /* ============================ ENGINE ============================ */
 const SECRET_DEFAULT_B64 = 'NzZpUmwwN3MweFNOOWpxbUVXQXQ3OUVCSlp1bElRSXNWNjRGWnIyTw==';
@@ -135,10 +136,10 @@ class MovieBoxEngine {
       }; 
     }).filter(x=>!isAdultGenre(x.genre));
 
-    // Strict filter to remove music tracks, mixes, and junk search results
+    // STRICT FILTER: Only keep Movies (1) and Series (2). Drop music/audio/shorts (6) and junk.
     items = items.filter(x => {
       if (!x.title || !x.subject_id) return false;
-      if (x.subject_type === 6) return false;
+      if (x.subject_type !== 1 && x.subject_type !== 2) return false;
       const t = x.title.toLowerCase();
       if (t.includes('mix') || t.includes('jukebox') || t.includes('dj ') || t.includes('playlist') || t.includes('remix') || t.includes('audio') || t.includes('mashup') || t.includes('covers')) return false;
       return true;
@@ -228,13 +229,18 @@ const fail=(res,message,status=503,code='UNAVAILABLE')=>res.status(status).json(
 
 function subFormat(c){ if(c.format) return c.format; const s=parseInt(c.size||0); if(s>0&&s<20000)return 'srt'; if(s>0&&s<40000)return 'vtt'; return 'srt'; }
 
-async function streamsOp(subjectId, season=0, episode=0, detailPath){
+// 🟢 LINKING PROXY TO STREAM & DOWNLOAD URLS TO PREVENT 429 ERRORS
+async function streamsOp(subjectId, season=0, episode=0, detailPath, reqHost){
   if(!/^\d+$/.test(subjectId)) throw new Error('INVALID_REQUEST');
   const rows = await engine.getStreams(subjectId, season, episode, detailPath||null);
   if(!rows.length) throw new Error('NO_MEDIA');
   const capId = (rows.find(r=>r._caption_stream_id)||{})._caption_stream_id;
   const captions = await engine.getSubtitles(subjectId, capId, season, episode);
   const fullDur = Math.max(0, ...rows.map(r=>parseFloat(r.duration_sec||0)));
+  
+  const PORT = process.env.PORT || 8787;
+  const BASE_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+
   const out=[];
   for(const row of rows){
     if(!row.url) continue;
@@ -245,7 +251,25 @@ async function streamsOp(subjectId, season=0, episode=0, detailPath){
     let size=row.size_bytes; size=(size&&/^\d+$/.test(String(size)))?parseInt(size):null;
     const headers={...(row.headers||{})}; for(const k of Object.keys(headers)) if(!headers[k]) delete headers[k];
     if(row.cookie) headers.Cookie=row.cookie;
-    out.push({ resourceId:String(row.id||out.length), url:row.url, resolution:quality, format:fmt, size, sizeBytes:size, duration:row.duration_sec||0, codecName:row.codec||'', headers, signCookie:row.cookie||headers.Cookie||'', requireMemberType:parseInt(row.requireMemberType||0), subtitles: captions.filter(c=>c.url).map(c=>({url:c.url, lan:c.code||'', lanName:c.language||'', format:subFormat(c)})) });
+
+    // Wrap raw CDN URL with proxy token to avoid 429 rate limiting
+    const token = streamProxy.remember(row.url, headers);
+    const proxyUrl = `${BASE_URL}/media/segment/${token}`;
+
+    out.push({ 
+      resourceId:String(row.id||out.length), 
+      url: proxyUrl, // Proxied URL for safe downloading and streaming
+      resolution:quality, 
+      format:fmt, 
+      size, 
+      sizeBytes:size, 
+      duration:row.duration_sec||0, 
+      codecName:row.codec||'', 
+      headers: {}, // Handled securely by proxy server
+      signCookie:'', 
+      requireMemberType:parseInt(row.requireMemberType||0), 
+      subtitles: captions.filter(c=>c.url).map(c=>({url:c.url, lan:c.code||'', lanName:c.language||'', format:subFormat(c)})) 
+    });
   }
   if(!out.length) throw new Error('NO_MEDIA');
   return out;
@@ -315,6 +339,7 @@ app.post(['/internal/movie','/api-server/internal/movie'], async (req,res)=>{
 app.get('/health',(req,res)=>res.json({ok:true,service:'moviebox-single'}));
 app.get('/movies/trending',async(req,res)=>{ try{ const raw=await engine.apiRequest('POST','/wefeed-mobile-bff/subject-api/trending/v2',{page:+(req.query.page||1),pageSize:+(req.query.pageSize||20)}); res.json({ok:true,data:stripAdult(raw.data)}); }catch(e){ fail(res,e.message,503,e.message);} });
 
+// STRICT MOVIE/SERIES SEARCH ENDPOINT (Filtering out music & junk)
 app.get('/movies/search',async(req,res)=>{
   const q=String(req.query.q||''), page=+(req.query.page||1);
   try{ 
@@ -361,7 +386,7 @@ app.get('/movies/search',async(req,res)=>{
 
 app.get('/shorts/trending',async(req,res)=>{ try{ const raw=await engine.apiRequest('POST','/wefeed-mobile-bff/shorts/most-trending',{page:+(req.query.page||1),pageSize:+(req.query.pageSize||20)}); res.json({ok:true,data:stripAdult(raw.data)}); }catch(e){ fail(res,e.message,503,e.message);} });
 app.get('/sports/list',async(req,res)=>{ try{ res.json({ok:true,data:await sportsGet('/live/match-list-v5',{sportType:String(req.query.sportType||'football')})}); }catch(e){ fail(res,e.message,503,e.message);} });
-app.get('/stream/:subjectId',async(req,res)=>{ try{ res.json({ok:true,data:await streamsOp(req.params.subjectId,+(req.query.se||0),+(req.query.ep||0),req.query.detailPath)}); }catch(e){ const s=e.message==='NO_MEDIA'?404:503; fail(res,'unavailable',s,e.message);} });
+app.get('/stream/:subjectId',async(req,res)=>{ try{ res.json({ok:true,data:await streamsOp(req.params.subjectId,+(req.query.se||0),+(req.query.ep||0),req.query.detailPath, req.get('host'))}); }catch(e){ const s=e.message==='NO_MEDIA'?404:503; fail(res,'unavailable',s,e.message);} });
 
 // live sport stream proxy: follows the m3u8 with the right referer and pipes it back.
 app.get('/live/sport', async (req,res)=>{
@@ -382,10 +407,9 @@ app.get('/live/sport', async (req,res)=>{
 
 try { require("./tg-storage").mount(app); } catch(e){ console.error("tg-storage mount failed:", e.message); }
 
-// stream proxy: player gets tokenized segment links, the relay replays CDN
-// requests with the right headers and a concurrency cap, stopping the 429s.
+// Mount stream proxy routes safely
 try {
-  const _proxy = require("./moviebox-stream-proxy").mount(app, streamsOp, null);
+  const _proxy = streamProxy.mount(app, streamsOp, null);
   app.post(["/internal/media", "/api-server/internal/media"], _proxy.mediaHandler);
   app.get("/media/segment/:token", _proxy.segmentHandler);
   app.head("/media/segment/:token", _proxy.segmentHandler);
