@@ -13,7 +13,7 @@ const crypto = require('crypto');
 const { URL } = require('url');
 
 const CDN_DOMAINS = ['hakunaymatata.com', 'aoneroom.com', 'zstlab.cyou', 'aisports.mobi'];
-const MEDIA_BASE = process.env.MEDIA_BASE || 'http://localhost:8787/media/segment/';
+const MEDIA_BASE = process.env.MEDIA_BASE || 'https://zahidapi.onrender.com/media/segment/';
 const MAX_STREAMS = parseInt(process.env.MAX_STREAMS || '24', 10);
 const MAX_MANIFEST = 4 * 1024 * 1024;
 const TARGET_TTL_MS = 4 * 60 * 60 * 1000;
