@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zaidi API Hub — Dashboard & Tester</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; background: #1e293b; padding: 30px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
+        h1 { color: #38bdf8; text-align: center; margin-bottom: 5px; }
+        p.subtitle { text-align: center; color: #94a3b8; margin-bottom: 30px; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 8px; font-weight: 600; color: #cbd5e1; }
+        input[type="text"] { width: 100%; padding: 12px; border: 1px solid #334155; background: #0f172a; color: #fff; border-radius: 8px; font-size: 16px; }
+        button { background: #0284c7; color: white; border: none; padding: 12px 20px; font-size: 16px; font-weight: bold; border-radius: 8px; cursor: pointer; width: 100%; transition: background 0.2s; }
+        button:hover { background: #0369a1; }
+        pre { background: #0f172a; padding: 15px; border-radius: 8px; overflow-x: auto; color: #34d399; border: 1px solid #334155; max-height: 400px; }
+        .result-box { margin-top: 25px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Zaidi API Hub 🚀</h1>
+        <p class="subtitle">YouTube Downloader & Movie API Tester Dashboard</p>
+        
+        <div class="form-group">
+            <label for="urlInput">Enter YouTube Video URL:</label>
+            <input type="text" id="urlInput" placeholder="https://www.youtube.com/watch?v=...">
+        </div>
+        <button onclick="fetchVideoData()">Fetch Download Links</button>
+
+        <div class="result-box">
+            <label>API Response Output:</label>
+            <pre id="output">{}</pre>
+        </div>
+    </div>
+
+    <script>
+        async function fetchVideoData() {
+            const url = document.getElementById('urlInput').value.trim();
+            const output = document.getElementById('output');
+            if(!url) { alert('Please enter a valid YouTube URL'); return; }
+
+            output.innerText = 'Loading... Please wait...';
+            try {
+                const res = await fetch(`/api/youtube?url=${encodeURIComponent(url)}`);
+                const data = await res.json();
+                output.innerText = JSON.stringify(data, null, 2);
+            } catch (err) {
+                output.innerText = 'Error: ' + err.message;
+            }
+        }
+    </script>
+</body>
+</html>
